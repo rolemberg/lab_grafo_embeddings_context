@@ -15,23 +15,39 @@ generate_dataset(n_customers=...) para testes de escala em
 experiments/cost.py), mas o DEFAULT sempre vem deste arquivo.
 """
 
+import os
+
 
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÃO DO MODELO
 # ---------------------------------------------------------------------------
 
+_DEFAULT_LOCAL_LLM_MODEL_PATH = (
+    "/Users/rolemberg/.cache/huggingface/hub/models--ibm-granite--granite-4.1-8b"
+)
+
 # ── Modelo LLM local (HuggingFace) ────────────────────────────
 # Caminho completo onde o modelo foi baixado
 # O HuggingFace salva em: models--<org>--<model>/snapshots/<hash>/
-LLM_MODEL_PATH: str = (
-    "/Users/rolemberg/.cache/huggingface/hub/models--ibm-granite--granite-4.1-8b"
-)
+# Prioridade de resolução:
+# 1) variável de ambiente LLM_MODEL_PATH (se definida)
+# 2) caminho local padrão, apenas se existir neste host
+# 3) string vazia (força uso de LLM_MODEL_ID)
+_llm_model_path_env = os.getenv("LLM_MODEL_PATH", "")
+if _llm_model_path_env is not None:
+    LLM_MODEL_PATH: str = _llm_model_path_env
+elif os.path.isdir(_DEFAULT_LOCAL_LLM_MODEL_PATH):
+    LLM_MODEL_PATH: str = _DEFAULT_LOCAL_LLM_MODEL_PATH
+else:
+    LLM_MODEL_PATH: str = ""
 # Se quiser usar o model ID direto (baixa automaticamente se não tiver):
-LLM_MODEL_ID: str = "ibm-granite/granite-4.1-8b"
+LLM_MODEL_ID: str = os.getenv("LLM_MODEL_ID", "ibm-granite/granite-4.1-8b")
 
 # ── Modelo Embedding ───────────────────────────────────────────
 # Granite Embeddings também pode ser local ou via HuggingFace ID
-EMBEDDING_MODEL_ID: str = "ibm-granite/granite-embedding-278m-multilingual"
+EMBEDDING_MODEL_ID: str = os.getenv(
+    "EMBEDDING_MODEL_ID", "ibm-granite/granite-embedding-278m-multilingual"
+)
 
 # Guard rails de inferência para reduzir OOM no MPS durante testes longos
 LLM_MAX_INPUT_TOKENS = 1024
