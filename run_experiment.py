@@ -110,7 +110,7 @@ def run_all(answer_fn=None, run_diagnostic=True, run_comparative=True, run_cost=
 
     if run_comparative:
         print("=" * 78)
-        print("EXPERIMENTO 2/3 -- COMPARATIVO (seção 5.3: 4 condições)")
+        print("EXPERIMENTO 2/3 -- COMPARATIVO (seção 5.3: 5 condições)")
         print("=" * 78)
         comp = run_comparative_experiment(ds, G, node_idx, embeddings, type_indexes, answer_fn=answer_fn)
         print(f"Total de trials: {len(comp)}\n")
