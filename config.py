@@ -23,7 +23,7 @@ import os
 # ---------------------------------------------------------------------------
 
 _DEFAULT_LOCAL_LLM_MODEL_PATH = (
-    "/Users/rolemberg/.cache/huggingface/hub/models--ibm-granite--granite-4.1-8b"
+    "~/.cache/huggingface/hub/models--ibm-granite--granite-4.1-8b"
 )
 
 # ── Modelo LLM local (HuggingFace) ────────────────────────────
@@ -36,8 +36,8 @@ _DEFAULT_LOCAL_LLM_MODEL_PATH = (
 _llm_model_path_env = os.getenv("LLM_MODEL_PATH", "")
 if _llm_model_path_env is not None:
     LLM_MODEL_PATH: str = _llm_model_path_env
-elif os.path.isdir(_DEFAULT_LOCAL_LLM_MODEL_PATH):
-    LLM_MODEL_PATH: str = _DEFAULT_LOCAL_LLM_MODEL_PATH
+elif os.path.isdir(os.path.expanduser(_DEFAULT_LOCAL_LLM_MODEL_PATH)):
+    LLM_MODEL_PATH: str = os.path.expanduser(_DEFAULT_LOCAL_LLM_MODEL_PATH)
 else:
     LLM_MODEL_PATH: str = ""
 # Se quiser usar o model ID direto (baixa automaticamente se não tiver):
