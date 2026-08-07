@@ -92,6 +92,17 @@ CUSTOMER_ENGAGEMENT_ALPHA = 1.2  # shape do Pareto p/ distribuição de engajame
 
 REFERENCE_CHANNEL = "web"        # canal-âncora: sempre existe p/ todo cliente sintético
 
+# Decaimento por recência nas arestas cliente->entidade e cliente->event_type.
+# Antes: peso = contagem bruta de ocorrências (log.groupby(...).size()).
+# Agora: cada ocorrência contribui exp(-idade / EDGE_RECENCY_HALF_LIFE_SECONDS
+# * ln(2)), então uma interação de ontem pesa mais que uma de 6 meses atrás
+# com a MESMA contagem total. "Idade" é relativa ao evento mais recente do
+# log inteiro (não "agora" do relógio real), pra ficar reprodutível com
+# dado sintético que não tem timestamp real.
+# None desliga o decaimento e volta ao comportamento antigo (contagem pura)
+# -- útil pra comparar os dois modos no artigo (seção de ablation).
+EDGE_RECENCY_HALF_LIFE_SECONDS = 30 * 24 * 3600   # meia-vida de 30 dias
+
 IDENTITY_EXACT_WEIGHT = 5.0      # peso fixo p/ aresta de identidade exata (chave compartilhada)
 IDENTITY_PROB_THRESHOLD = 0.40   # score mínimo p/ criar aresta de identidade probabilística
                                   # (recalibrado para a escala do score TF-IDF + distribuição

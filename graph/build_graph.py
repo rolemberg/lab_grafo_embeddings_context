@@ -60,9 +60,11 @@ from embeddings.semantic import fit_text_vectorizer, similarity as semantic_simi
 # CONFIG
 # ---------------------------------------------------------------------------
 
+import numpy as np
+
 from config import (
     IDENTITY_EXACT_WEIGHT, IDENTITY_PROB_THRESHOLD, IDENTITY_TOPK_CANDIDATES,
-    W_ENTITY_OVERLAP, W_TEXT_SIM, REFERENCE_CHANNEL,
+    W_ENTITY_OVERLAP, W_TEXT_SIM, REFERENCE_CHANNEL, EDGE_RECENCY_HALF_LIFE_SECONDS,
 )
 
 # NOTA sobre IDENTITY_PROB_THRESHOLD (valor em config.py, hoje 0.40):
@@ -83,10 +85,29 @@ from config import (
 # ARESTAS DE INTERAÇÃO (cliente-local -> entidade, entidade <-> entidade)
 # ---------------------------------------------------------------------------
 
-def add_interaction_edges(G, log):
-    """customer_local -> entity, peso = quantas vezes esse cliente-local
-    interagiu com essa entidade."""
-    w = log.groupby(["local_customer_id", "entity_id"]).size()
+def _recency_weighted_group_sum(log, group_cols, half_life_seconds=EDGE_RECENCY_HALF_LIFE_SECONDS):
+    """Soma por grupo, mas cada linha contribui exp(-idade * ln2 / meia_vida)
+    em vez de 1.0. "Idade" é relativa ao ts mais recente do log inteiro.
+
+    half_life_seconds=None -> comportamento antigo (equivalente a .size()),
+    útil pra rodar a ablation "com vs. sem recência" sem duplicar código.
+    """
+    if half_life_seconds is None:
+        return log.groupby(group_cols).size().astype(float)
+
+    ref_ts = log["ts"].max()
+    age = ref_ts - log["ts"]
+    decay_rate = np.log(2) / half_life_seconds
+    contrib = np.exp(-decay_rate * age)
+    return log.assign(_contrib=contrib).groupby(group_cols)["_contrib"].sum()
+
+
+def add_interaction_edges(G, log, half_life_seconds=EDGE_RECENCY_HALF_LIFE_SECONDS):
+    """customer_local -> entity, peso = soma ponderada por recência de
+    quantas vezes esse cliente-local interagiu com essa entidade (ver
+    _recency_weighted_group_sum -- half_life_seconds=None recupera a
+    contagem bruta antiga)."""
+    w = _recency_weighted_group_sum(log, ["local_customer_id", "entity_id"], half_life_seconds)
     for (cust, ent), weight in w.items():
         G.add_edge(cust, ent, weight=float(weight), edge_type="interaction")
 
@@ -106,11 +127,13 @@ def add_session_cooccurrence_edges(G, log):
                     G.add_edge(a, b, weight=0.5, edge_type="session_cooccurrence")
 
 
-def add_event_type_edges(G, log):
-    """customer_local -> event_type, peso = frequência. Permite que o
-    PPR capture "esse cliente é do tipo que abre muito chamado de
-    suporte" como sinal estrutural, não só via entidade."""
-    w = log.groupby(["local_customer_id", "event_type"]).size()
+def add_event_type_edges(G, log, half_life_seconds=EDGE_RECENCY_HALF_LIFE_SECONDS):
+    """customer_local -> event_type, peso = soma ponderada por recência.
+    Permite que o PPR capture "esse cliente ANDA abrindo muito chamado de
+    suporte" (peso puxado pro recente) em vez de "esse cliente abriu
+    muito chamado alguma vez" (contagem histórica pura) -- sinal
+    estrutural, não só via entidade."""
+    w = _recency_weighted_group_sum(log, ["local_customer_id", "event_type"], half_life_seconds)
     for (cust, et), weight in w.items():
         G.add_edge(cust, et, weight=float(weight), edge_type="event_type")
 

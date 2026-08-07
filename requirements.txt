@@ -1,0 +1,10 @@
+numpy
+pandas
+scipy
+networkx
+scikit-learn
+matplotlib
+
+# Opcional para rodar com LLM local/Hugging Face
+transformers
+torch

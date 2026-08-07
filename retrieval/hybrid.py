@@ -104,6 +104,89 @@ def hybrid_retrieve(query_node, G, node_idx, embeddings, type_indexes,
 
 
 # ---------------------------------------------------------------------------
+# VARIANTE MULTI-SEED: recall + rerank a partir de VÁRIOS nós de query
+# ponderados, não um só. Necessário para memória de sessão (memória
+# curta), onde o vetor de personalização acumula massa de vários tópicos
+# ao longo de uma ligação, em vez de uma única query fixa.
+# Aditivo -- não altera hybrid_retrieve()/local_ppr_rerank() acima, que
+# continuam servindo o caso de uma consulta única (ex: experiments/).
+# ---------------------------------------------------------------------------
+
+def recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes,
+                                    target_type="entity", k_per_seed=20):
+    """Recall unindo candidatos de CADA nó do vetor de seed (peso > 0),
+    na ordem de maior peso primeiro. Não pondera o recall em si -- o
+    peso de cada seed só importa depois, no rerank via PPR
+    personalizado (local_ppr_rerank_from_weights)."""
+    ordered_seeds = sorted(seed_weights.items(), key=lambda kv: kv[1], reverse=True)
+    candidates, seen = [], set()
+    for node, weight in ordered_seeds:
+        if weight <= 0 or node not in node_idx:
+            continue
+        for c in recall_candidates(node, node_idx, embeddings, type_indexes,
+                                    target_type=target_type, k=k_per_seed):
+            if c not in seen:
+                seen.add(c)
+                candidates.append(c)
+    return candidates
+
+
+def local_ppr_rerank_from_weights(G, seed_weights, candidates, top_k=10,
+                                   max_neighbors_per_candidate=MAX_NEIGHBORS_PER_CANDIDATE):
+    """Mesma mecânica de local_ppr_rerank(), mas o vetor de
+    personalização vem de um DICT {nó: peso} já normalizado externamente
+    (o estado acumulado da memória curta), em vez de massa 1.0 num único
+    nó de query."""
+    active_seeds = {n: w for n, w in seed_weights.items() if w > 0 and n in G}
+    if not active_seeds:
+        return []
+
+    local_nodes = set(candidates) | set(active_seeds)
+    for c in candidates:
+        if c in G:
+            local_nodes.update(_top_weighted_neighbors(G, c, max_neighbors_per_candidate))
+    for s in active_seeds:
+        local_nodes.update(_top_weighted_neighbors(G, s, max_neighbors_per_candidate))
+    subG = G.subgraph(local_nodes)
+
+    # personalização só sobre seeds que sobreviveram no subgrafo induzido;
+    # renormaliza pra somar 1 (nx.pagerank não exige isso, mas deixa a
+    # massa relativa entre seeds explícita e auditável)
+    sub_seeds = {n: w for n, w in active_seeds.items() if n in subG}
+    if not sub_seeds:
+        return []
+    total = sum(sub_seeds.values())
+    personalization = {n: (sub_seeds.get(n, 0.0) / total) for n in subG.nodes()}
+
+    try:
+        scores = nx.pagerank(subG, alpha=PPR_ALPHA, personalization=personalization,
+                              weight="weight", max_iter=PPR_MAX_ITER)
+    except nx.PowerIterationFailedConvergence:
+        scores = nx.pagerank(subG, alpha=PPR_ALPHA, personalization=personalization,
+                              weight="weight", max_iter=PPR_MAX_ITER_FALLBACK, tol=1e-4)
+
+    ranked = sorted(
+        [(n, s) for n, s in scores.items() if n in candidates],
+        key=lambda x: x[1], reverse=True,
+    )
+    return ranked[:top_k]
+
+
+def hybrid_retrieve_from_weights(seed_weights, G, node_idx, embeddings, type_indexes,
+                                  k_recall_per_seed=20, top_k=10, target_type="entity"):
+    """Versão multi-seed de hybrid_retrieve(). Usada por
+    agent/session_memory.py para servir consultas cujo foco evolui ao
+    longo de uma sessão."""
+    t0 = time.perf_counter()
+    candidates = recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes,
+                                                 target_type=target_type, k_per_seed=k_recall_per_seed)
+    t1 = time.perf_counter()
+    ranked = local_ppr_rerank_from_weights(G, seed_weights, candidates, top_k=top_k)
+    t2 = time.perf_counter()
+    return ranked, (t1 - t0) * 1000, (t2 - t1) * 1000
+
+
+# ---------------------------------------------------------------------------
 # BASELINE: PPR NO GRAFO INTEIRO (só para comparação de custo, 5.4)
 # ---------------------------------------------------------------------------
 
