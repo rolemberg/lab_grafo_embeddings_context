@@ -39,13 +39,15 @@ import os
 import re
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dataclasses import dataclass, field
 
 from agent.tool_contract import _entry_node, _known_channel_nodes
 from retrieval.hybrid import hybrid_retrieve_from_weights
-from config import MAX_EVENTS_PER_ENTITY
+from config import MAX_EVENTS_PER_ENTITY, EDGE_RECENCY_HALF_LIFE_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +103,25 @@ class SessionMemory:
         cust_events = self.log[self.log.local_customer_id.isin(self.known_nodes)]
         if len(cust_events) == 0:
             return
-        top_entities = cust_events.entity_id.value_counts().head(top_n)
+        # peso por RECÊNCIA de verdade (não frequência bruta) -- mesma
+        # fórmula de decaimento usada nas arestas do grafo
+        # (graph/build_graph.py::_recency_weighted_group_sum), pra que uma
+        # entidade com 1 evento bem recente não perca pra outra com muitos
+        # eventos antigos. Bug real encontrado rodando com LLM: fact_type
+        # "last_entity" (pergunta sobre a interação mais recente) falhava
+        # em 6/6 casos porque o seed antigo (value_counts().head(top_n))
+        # descartava a entidade certa quando ela não era também a mais
+        # frequente.
+        ref_ts = cust_events["ts"].max()
+        age = ref_ts - cust_events["ts"]
+        decay_rate = np.log(2) / EDGE_RECENCY_HALF_LIFE_SECONDS
+        contrib = np.exp(-decay_rate * age)
+        scores = cust_events.assign(_contrib=contrib).groupby("entity_id")["_contrib"].sum()
+        top_entities = scores.sort_values(ascending=False).head(top_n)
         total = top_entities.sum()
-        for ent, count in top_entities.items():
+        for ent, score in top_entities.items():
             if ent in self.node_idx:
-                self.seed_weights[ent] = self.seed_weights.get(ent, 0.0) + count / total
+                self.seed_weights[ent] = self.seed_weights.get(ent, 0.0) + score / total
 
     # -----------------------------------------------------------------
     # NOVO TURNO -- decai o que já estava acumulado, então injeta massa
@@ -167,7 +183,18 @@ class SessionMemory:
         if len(cust_events) == 0:
             lines.append("Nenhum evento encontrado para este cliente.")
             return "\n".join(lines)
- 
+
+        # RESUMO AGREGADO -- faltava aqui (existe em tool_contract.py, não
+        # tinha sido portado). Sem isso, perguntas sobre CONTAGEM TOTAL por
+        # tipo de evento (ex: fact_type="support_ticket_count") não têm de
+        # onde tirar a resposta em lugar nenhum do texto -- bug real
+        # encontrado rodando com LLM: 2/2 casos desse fact_type falharam
+        # por esse motivo exato.
+        counts = cust_events.event_type.value_counts()
+        resumo = ", ".join(f"{k}: {v}" for k, v in counts.items())
+        lines.append(f"Resumo de atividade ({len(cust_events)} eventos totais): {resumo}")
+        lines.append("")
+
         for ent, score in ranked_entities:
             ev = cust_events[cust_events.entity_id == ent].sort_values("ts", ascending=False)
             if len(ev) == 0:

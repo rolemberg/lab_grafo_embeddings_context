@@ -19,7 +19,9 @@ igualmente aqui e na sua máquina, com o mesmo resultado.
 from __future__ import annotations
 
 import argparse
+import os
 import time
+from datetime import datetime
 
 from data.synthetic_events import generate_dataset
 from graph.build_graph import build_graph
@@ -81,6 +83,23 @@ def build_pipeline(n_customers=None, n_events=None, seed=None, verbose=True):
 
 
 # ---------------------------------------------------------------------------
+# PERSISTÊNCIA DE RESULTADOS -- cada execução salva um CSV com timestamp,
+# pra nunca mais perder um resultado (inclusive rodadas com --granite,
+# que custam tempo real pra reproduzir).
+# ---------------------------------------------------------------------------
+
+def _save_results(results: dict, out_dir="results"):
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    saved_paths = []
+    for name, df in results.items():
+        path = os.path.join(out_dir, f"{name}_{stamp}.csv")
+        df.to_csv(path, index=False)
+        saved_paths.append(path)
+    return saved_paths
+
+
+# ---------------------------------------------------------------------------
 # ORQUESTRAÇÃO DOS 3 EXPERIMENTOS
 # ---------------------------------------------------------------------------
 
@@ -134,6 +153,13 @@ def run_all(answer_fn=None, run_diagnostic=True, run_comparative=True, run_cost=
             print(f"CROSSOVER: híbrido compensa a partir de ~{int(crossover.n_customers)} "
                   f"clientes ({int(crossover.n_nodes)} nós), speedup={crossover.speedup:.2f}x")
         results["cost"] = cost
+
+    if results:
+        saved_paths = _save_results(results)
+        print("Resultados salvos em:")
+        for p in saved_paths:
+            print(f"  {p}")
+        print()
 
     return results
 

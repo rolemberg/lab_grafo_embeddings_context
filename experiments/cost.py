@@ -39,7 +39,7 @@ from retrieval.hybrid import hybrid_retrieve, full_graph_ppr
 # CONFIG DA VARREDURA
 # ---------------------------------------------------------------------------
 
-from config import SEED, SCALE_POINTS_N_CUSTOMERS, EVENTS_PER_CUSTOMER_RATIO, N_QUERIES_PER_SCALE
+from config import SEED, SCALE_POINTS_N_CUSTOMERS, EVENTS_PER_CUSTOMER_RATIO, N_QUERIES_PER_SCALE, N_REPETITIONS_PER_SCALE_POINT
 
 
 # ---------------------------------------------------------------------------
@@ -103,17 +103,58 @@ def _measure_scale_point(n_customers, n_queries=N_QUERIES_PER_SCALE, seed=SEED):
 
 
 # ---------------------------------------------------------------------------
+# REPETIÇÃO + AGREGAÇÃO POR PONTO DE ESCALA
+#
+# UMA medição só de latência é ruído de carga de máquina disfarçado de
+# resultado -- vimos isso na prática: o mesmo n_customers=600, mesmo
+# SEED, deu speedup=2.23x numa execução e 0.98x na seguinte. Por isso
+# cada ponto de escala roda N_REPETITIONS_PER_SCALE_POINT vezes (variando
+# o seed em cada repetição -- reprodutível, mas não a mesma amostra de
+# consultas toda vez) e reporta a MEDIANA, não uma execução isolada.
+# ---------------------------------------------------------------------------
+
+def _measure_scale_point_repeated(n_customers, n_queries=N_QUERIES_PER_SCALE,
+                                   seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT):
+    reps = [
+        _measure_scale_point(n_customers, n_queries=n_queries, seed=seed + rep)
+        for rep in range(n_repeats)
+    ]
+    reps_df = pd.DataFrame(reps)
+
+    agg = {
+        "n_customers": n_customers,
+        "n_nodes": reps_df["n_nodes"].median(),
+        "n_edges": reps_df["n_edges"].median(),
+        "t_data_gen_s": reps_df["t_data_gen_s"].median(),
+        "t_build_graph_s": reps_df["t_build_graph_s"].median(),
+        "t_embeddings_s": reps_df["t_embeddings_s"].median(),
+        "avg_t_hybrid_ms": reps_df["avg_t_hybrid_ms"].median(),
+        "avg_t_full_ppr_ms": reps_df["avg_t_full_ppr_ms"].median(),
+        "speedup": reps_df["speedup"].median(),
+        "speedup_std": reps_df["speedup"].std(),
+        "speedup_min": reps_df["speedup"].min(),
+        "speedup_max": reps_df["speedup"].max(),
+        "avg_overlap_top10": reps_df["avg_overlap_top10"].median(),
+        "n_repeats": n_repeats,
+    }
+    return agg
+
+
+# ---------------------------------------------------------------------------
 # VARREDURA COMPLETA
 # ---------------------------------------------------------------------------
 
-def run_cost_experiment(scale_points=SCALE_POINTS_N_CUSTOMERS, n_queries=N_QUERIES_PER_SCALE, seed=SEED):
+def run_cost_experiment(scale_points=SCALE_POINTS_N_CUSTOMERS, n_queries=N_QUERIES_PER_SCALE,
+                         seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT):
     rows = []
     for n_customers in scale_points:
-        print(f"[cost.py] medindo escala n_customers={n_customers} ...")
-        row = _measure_scale_point(n_customers, n_queries=n_queries, seed=seed)
+        print(f"[cost.py] medindo escala n_customers={n_customers} ({n_repeats} repetições) ...")
+        row = _measure_scale_point_repeated(n_customers, n_queries=n_queries, seed=seed, n_repeats=n_repeats)
         rows.append(row)
-        print(f"  -> n_nodes={row['n_nodes']} | build_graph={row['t_build_graph_s']:.2f}s | "
-              f"speedup={row['speedup']:.2f}x | overlap={row['avg_overlap_top10']:.1%}")
+        print(f"  -> n_nodes={row['n_nodes']:.0f} | build_graph={row['t_build_graph_s']:.2f}s | "
+              f"speedup mediana={row['speedup']:.2f}x (min={row['speedup_min']:.2f}x, "
+              f"max={row['speedup_max']:.2f}x, std={row['speedup_std']:.2f}) | "
+              f"overlap={row['avg_overlap_top10']:.1%}")
     return pd.DataFrame(rows)
 
 
@@ -137,8 +178,10 @@ if __name__ == "__main__":
     print("RESULTADO DA VARREDURA DE ESCALA")
     print("=" * 90)
     cols = ["n_customers", "n_nodes", "n_edges", "t_build_graph_s",
-            "avg_t_hybrid_ms", "avg_t_full_ppr_ms", "speedup", "avg_overlap_top10"]
+            "avg_t_hybrid_ms", "avg_t_full_ppr_ms", "speedup", "speedup_std", "avg_overlap_top10"]
     print(results[cols].to_string(index=False))
+    print(f"\n(speedup = mediana de {int(results.n_repeats.iloc[0])} repetições por ponto de escala; "
+          f"speedup_std = desvio padrão entre repetições -- quanto maior, menos confiável o ponto)")
 
     crossover = find_crossover(results)
     print("\n" + "=" * 90)
@@ -163,10 +206,12 @@ if __name__ == "__main__":
 
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
-        axes[0].plot(results.n_nodes, results.speedup, marker="o")
+        axes[0].errorbar(results.n_nodes, results.speedup,
+                          yerr=[results.speedup - results.speedup_min, results.speedup_max - results.speedup],
+                          marker="o", capsize=3)
         axes[0].axhline(1.0, color="gray", linestyle="--", linewidth=1)
         axes[0].set_xlabel("nº de nós no grafo")
-        axes[0].set_ylabel("speedup (PPR completo / híbrido)")
+        axes[0].set_ylabel("speedup mediana (min-max)")
         axes[0].set_title("Speedup do híbrido vs. escala do grafo")
 
         axes[1].plot(results.n_nodes, results.t_build_graph_s, marker="o", label="construção do grafo")

@@ -1,20 +1,30 @@
 """
 experiments/comparative.py
 
-Experimento COMPARATIVO (seção 5.3 do artigo): compara 4 condições de
+Experimento COMPARATIVO (seção 5.3 do artigo): compara 5 condições de
 injeção de contexto, mantendo o LLM FIXO entre elas -- o único fator
 que varia é COMO o contexto chega até o modelo. Isso isola o efeito do
 método de retrieval da capacidade de tool-calling do modelo base (o
 mesmo controle de confound discutido na seção 5 do esqueleto).
 
-As 4 condições:
+As 5 condições:
   1) sem_retrieval       -- nenhum contexto de cliente (baseline "cego")
   2) contexto_completo    -- despeja todo o histórico conhecido do cliente
   3) topk_estatico        -- top-k entidades por frequência simples (sem
                               PPR, sem propagação de grafo) -- baseline de
                               retrieval "raso"
   4) hibrido_sob_demanda  -- exatamente o que agent/tool_contract.py
-                              devolveria (recall + PPR local)
+                              devolveria (recall + PPR local), seed = 1
+                              nó de entrada só, sem clash resolvido
+  5) sessao_memoria       -- agent/session_memory.py em "momento 0" (sem
+                              add_turn -- ver nota na função abaixo):
+                              mesma ausência de foco que a condição 4,
+                              mas com seed distribuído sobre N entidades
+                              recentes e context clash resolvido por
+                              recência. Isola as contribuições 1 e 3 do
+                              artigo (política de clash; mecanismo de
+                              memória de sessão) do efeito de foco/tópico,
+                              que fica pro próximo experimento (multi-turno).
 
 ESTRATIFICAÇÃO: clientes são amostrados em dois segmentos -- "leve"
 (perto da mediana de engajamento) e "pesado" (cauda longa) -- porque a
@@ -41,6 +51,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.tool_contract import _entry_node, _known_channel_nodes, buscar_contexto_cliente
+from agent.session_memory import SessionMemory
 from experiments.diagnostic import (
     _format_target_line,
     _format_event_line,
@@ -126,11 +137,32 @@ def context_hibrido(customer_id, G, node_idx, embeddings, type_indexes, log,
     return result["context_text"]
 
 
+# ---------------------------------------------------------------------------
+# CONDIÇÃO 5: SESSÃO DE MEMÓRIA (hipocampo/conteúdo + clash por recência)
+#
+# Comparação justa com a condição 4: mesma ausência de foco explícito do
+# cliente (nenhum add_turn() é chamado -- só "momento 0", seed por
+# recência/frequência do próprio cliente, igual ao entry_node único que
+# o hibrido_sob_demanda usa). O que muda entre as duas é (a) seed
+# distribuído sobre N entidades recentes em vez de 1 nó de entrada só, e
+# (b) resolução de context clash por recência na montagem do texto --
+# isola exatamente as contribuições 1 e 3 do artigo, não confunde com
+# efeito de foco/tópico (isso é o próximo experimento, multi-turno).
+# ---------------------------------------------------------------------------
+
+def context_sessao_memoria(customer_id, G, node_idx, embeddings, type_indexes, log,
+                            k=TOPK_STATIC_K, **kwargs):
+    session = SessionMemory(customer_id, G, node_idx, embeddings, type_indexes, log)
+    result = session.get_context(top_k=k)
+    return result["context_text"]
+
+
 CONTEXT_BUILDERS = {
     "sem_retrieval": context_sem_retrieval,
     "contexto_completo": context_completo,
     "topk_estatico": context_topk_estatico,
     "hibrido_sob_demanda": context_hibrido,
+    "sessao_memoria": context_sessao_memoria,
 }
 
 

@@ -166,7 +166,7 @@ N_CUSTOMERS_PER_CONDITION = 2           # trials por combinação (ruído x posi
 # experiments/comparative.py
 # ---------------------------------------------------------------------------
 
-CONDITIONS = ["sem_retrieval", "contexto_completo", "topk_estatico", "hibrido_sob_demanda"]
+CONDITIONS = ["sem_retrieval", "contexto_completo", "topk_estatico", "hibrido_sob_demanda", "sessao_memoria"]
 TOPK_STATIC_K = 3                # tamanho do top-k estático (mesmo k do híbrido -- comparação justa)
 N_CUSTOMERS_PER_SEGMENT = 5      # por segmento (leve/pesado) e por tipo de fato
 HEAVY_SEGMENT_PERCENTILE = 0.95   # cliente "pesado" = acima deste percentil de engajamento
@@ -179,3 +179,6 @@ HEAVY_SEGMENT_PERCENTILE = 0.95   # cliente "pesado" = acima deste percentil de 
 SCALE_POINTS_N_CUSTOMERS = [100, 300, 600, 1000, 1500]
 EVENTS_PER_CUSTOMER_RATIO = 15    # mesma densidade do dataset default (N_EVENTS / N_CUSTOMERS)
 N_QUERIES_PER_SCALE = 8           # consultas amostradas por ponto de escala
+N_REPETITIONS_PER_SCALE_POINT = 5  # repetições por ponto de escala -- reportar mediana,
+                                    # não uma medição só (latência tem ruído de carga da
+                                    # máquina entre execuções -- ver achado no artigo, seção 6)
