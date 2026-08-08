@@ -1,0 +1,4 @@
+condition_a,condition_b,segment,n_pairs,n_a_only,n_b_only,n_concordant,p_value
+sessao_memoria,hibrido_sob_demanda,geral,110,19,3,88,0.0008554458618164062
+sessao_memoria,hibrido_sob_demanda,leve,60,10,2,48,0.03857421875
+sessao_memoria,hibrido_sob_demanda,pesado,50,9,1,40,0.021484375

@@ -54,10 +54,18 @@ from config import MAX_EVENTS_PER_ENTITY, EDGE_RECENCY_HALF_LIFE_SECONDS
 # CONFIG DESTE MÓDULO
 # ---------------------------------------------------------------------------
  
-SHORT_TERM_DECAY = 0.6      # fator aplicado ao seed acumulado a cada novo turno
+SHORT_TERM_DECAY = 0.8      # fator aplicado ao seed acumulado a cada novo turno
                              # ("esquecimento de curto prazo" dentro da própria ligação)
 INITIAL_SEED_TOP_N = 5       # quantas entidades recentes formam o seed do momento 0
 TOPIC_MASS = 1.0             # massa injetada por tópico novo mencionado pelo cliente
+ANCHOR_MASS = 1.0            # massa reforçada no nó do próprio cliente a cada turno --
+                              # sem isso, quando o seed cai num nó de categoria (hub
+                              # compartilhado por todos os clientes), o PPR perde de
+                              # vista "de quem" é a busca e dilui o sinal específico
+                              # do cliente. Achado confirmado por
+                              # experiments/multiturn.py: sem ancoragem, recall da
+                              # entidade certa CAI depois do cliente mencionar o
+                              # assunto, em vez de subir.
  
 # placeholder determinístico -- ver nota (2) no docstring do módulo
 TOPIC_TO_EVENT_TYPE = {
@@ -131,24 +139,48 @@ class SessionMemory:
         self.turn_count += 1
         for node in list(self.seed_weights):
             self.seed_weights[node] *= SHORT_TERM_DECAY
- 
+
+        # ÂNCORA: reforça o nó do próprio cliente a cada turno, ANTES de
+        # somar massa em qualquer categoria. Sem isso, um nó de categoria
+        # compartilhado (ex: "support_ticket") domina o vetor de
+        # personalização e o PPR passa a responder "o que é comum entre
+        # TODOS os clientes desse tópico", não "o que é específico DESSE
+        # cliente" -- ver nota em ANCHOR_MASS acima.
+        #
+        # Usa MAX, não soma: reforçar com += faz a âncora CRESCER a cada
+        # turno (decai 0.6, soma 1.0 de novo -> tende a 2.5 depois de
+        # poucos turnos), o que sufoca o próprio tópico recém-mencionado
+        # -- mesma classe de problema (diluição), só que causada pelo
+        # fix em vez de pelo hub. Com max(), a âncora fica establizada em
+        # ANCHOR_MASS, nunca menos (o piso) e nunca crescendo sem limite.
+        if self.entry_node in self.node_idx:
+            current = self.seed_weights.get(self.entry_node, 0.0)
+            self.seed_weights[self.entry_node] = max(current, ANCHOR_MASS)
+
         text = utterance.lower()
         matched_any = False
- 
+
         # 1) menção direta a uma entidade conhecida (ex: "ent_12")
         for ent in _ENTITY_PATTERN.findall(text):
             if ent in self.node_idx:
                 self.seed_weights[ent] = self.seed_weights.get(ent, 0.0) + weight
                 matched_any = True
- 
+
         # 2) categoria/domínio por palavra-chave -> fallback pro nó de
         #    event_type (cold-start: funciona mesmo sem histórico direto
-        #    desse cliente nesse tópico)
-        for keyword, event_type in TOPIC_TO_EVENT_TYPE.items():
-            if keyword in text and event_type in self.node_idx:
-                self.seed_weights[event_type] = self.seed_weights.get(event_type, 0.0) + weight
-                matched_any = True
- 
+        #    desse cliente nesse tópico). DEDUPLICADO por event_type: a
+        #    frase pode bater em várias palavras-chave do mesmo tópico
+        #    ("problema", "chamado" e "suporte" todas mapeiam pra
+        #    support_ticket) -- sem isso, o mesmo tópico levava 3x a
+        #    massa só por sorte de vocabulário, sufocando a âncora acima.
+        matched_event_types = {
+            event_type for keyword, event_type in TOPIC_TO_EVENT_TYPE.items()
+            if keyword in text and event_type in self.node_idx
+        }
+        for event_type in matched_event_types:
+            self.seed_weights[event_type] = self.seed_weights.get(event_type, 0.0) + weight
+            matched_any = True
+
         return matched_any
 
      # -----------------------------------------------------------------

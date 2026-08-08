@@ -159,7 +159,7 @@ FACT_TYPES = ["last_entity", "support_ticket_count"]
 NOISE_LEVELS = [0.0, 0.5, 0.9]               # fração do contexto que é ruído
 POSITIONS = ["inicio", "meio", "fim"]                # onde o alvo fica embutido
 TOTAL_CONTEXT_LINES = 12                # tamanho do contexto quando noise_pct=1.0
-N_CUSTOMERS_PER_CONDITION = 2           # trials por combinação (ruído x posição x fato)
+N_CUSTOMERS_PER_CONDITION = 30           # trials por combinação (ruído x posição x fato)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ N_CUSTOMERS_PER_CONDITION = 2           # trials por combinação (ruído x posi
 
 CONDITIONS = ["sem_retrieval", "contexto_completo", "topk_estatico", "hibrido_sob_demanda", "sessao_memoria"]
 TOPK_STATIC_K = 3                # tamanho do top-k estático (mesmo k do híbrido -- comparação justa)
-N_CUSTOMERS_PER_SEGMENT = 5      # por segmento (leve/pesado) e por tipo de fato
+N_CUSTOMERS_PER_SEGMENT = 30      # por segmento (leve/pesado) e por tipo de fato
 HEAVY_SEGMENT_PERCENTILE = 0.95   # cliente "pesado" = acima deste percentil de engajamento
 
 
@@ -182,3 +182,23 @@ N_QUERIES_PER_SCALE = 8           # consultas amostradas por ponto de escala
 N_REPETITIONS_PER_SCALE_POINT = 5  # repetições por ponto de escala -- reportar mediana,
                                     # não uma medição só (latência tem ruído de carga da
                                     # máquina entre execuções -- ver achado no artigo, seção 6)
+
+
+# ---------------------------------------------------------------------------
+# experiments/multiturn.py
+#
+# Experimento MULTI-TURNO (contribuição 3 do artigo): exercita
+# SessionMemory.add_turn() de verdade, ao longo de uma sessão simulada
+# de 3 momentos (0=sem fala, 1=cliente menciona suporte, 2=cliente muda
+# de assunto pra compra) -- não existia nenhum experimento formal
+# fazendo isso antes, só a demo manual em agent/session_memory.py.
+# ---------------------------------------------------------------------------
+
+N_CUSTOMERS_MULTITURN = 30   # clientes com histórico nos dois tópicos (suporte E compra)
+MULTITURN_TOP_K = 6          # top-k de entidades retornado em cada get_context()
+
+# utterances placeholder -- mesmo espírito de TOPIC_TO_EVENT_TYPE em
+# session_memory.py (palavra-chave determinística, não classificador de
+# intenção real -- ver nota lá)
+MULTITURN_UTTERANCE_SUPORTE = "tenho um problema, quero abrir um chamado de suporte"
+MULTITURN_UTTERANCE_COMPRA = "na verdade é sobre uma compra que eu fiz recentemente"
