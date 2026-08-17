@@ -252,6 +252,16 @@ def answer_with_local_hf_model(question, context,
               f"Pergunta: {question}\n"
               f"Responda apenas com o valor solicitado, sem explicação.\nResposta:")
 
+    # BUG REAL encontrado rodando em escala (clientes "pesados", contexto
+    # grande): tokenizer(..., truncation=True) trunca do lado DIREITO por
+    # padrão -- corta o FIM do prompt, que é exatamente onde estão a
+    # pergunta e "Resposta:". Isso produzia resposta vazia (malformed)
+    # consistentemente em clientes com histórico grande o bastante pra
+    # estourar max_input_tokens, disfarçado de "o modelo não sabe
+    # responder" quando na verdade ele nunca viu a pergunta. Fix: truncar
+    # do lado ESQUERDO -- se precisar cortar, corta contexto antigo, não
+    # a pergunta.
+    tokenizer.truncation_side = "left"
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
@@ -271,6 +281,7 @@ def answer_with_local_hf_model(question, context,
                     torch.mps.empty_cache()
 
                 cpu_tokenizer, cpu_model = _load_local_hf_stack(model_source, "cpu")
+                cpu_tokenizer.truncation_side = "left"  # mesmo fix -- ver nota acima
                 cpu_inputs = cpu_tokenizer(
                     prompt,
                     return_tensors="pt",
@@ -283,7 +294,26 @@ def answer_with_local_hf_model(question, context,
             raise
 
     generated = output[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+    answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+    # ACHADO NÃO TOTALMENTE EXPLICADO: em ~6% dos casos do segmento pesado
+    # (fact_type support_ticket_count), a decodificação gulosa
+    # (do_sample=False) produzia resposta vazia -- confirmado NÃO ser
+    # truncamento de prompt (contexto bem abaixo do limite de tokens
+    # nesses casos específicos). Causa raiz não identificada sem rodar o
+    # modelo de verdade (não disponível no ambiente onde este código foi
+    # escrito). Mitigação pragmática, não diagnóstico definitivo: se a
+    # geração gulosa vier vazia, tenta 1x com amostragem -- documentar
+    # isso explicitamente na Seção 7 se a taxa de retry for não-trivial
+    # (adicione logging/contagem se for medir isso para o artigo).
+    if not answer:
+        with torch.inference_mode():
+            output = model.generate(**inputs, max_new_tokens=max_new_tokens,
+                                     do_sample=True, temperature=0.3, top_p=0.9)
+        generated = output[0][inputs["input_ids"].shape[1]:]
+        answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+    return answer
 
 
 ANSWER_FN = answer_with_local_hf_model  # <-- troque aqui para medir degradação real

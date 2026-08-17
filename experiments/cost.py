@@ -46,7 +46,9 @@ from config import SEED, SCALE_POINTS_N_CUSTOMERS, EVENTS_PER_CUSTOMER_RATIO, N_
 # UMA MEDIÇÃO POR PONTO DE ESCALA
 # ---------------------------------------------------------------------------
 
-def _measure_scale_point(n_customers, n_queries=N_QUERIES_PER_SCALE, seed=SEED):
+def _measure_scale_point(n_customers, n_queries=N_QUERIES_PER_SCALE, seed=SEED, emb_dim=None):
+    from config import EMB_DIM
+    emb_dim = emb_dim or EMB_DIM
     n_events = n_customers * EVENTS_PER_CUSTOMER_RATIO
 
     t0 = time.perf_counter()
@@ -60,7 +62,7 @@ def _measure_scale_point(n_customers, n_queries=N_QUERIES_PER_SCALE, seed=SEED):
     t_build_graph = t1 - t0
 
     t0 = time.perf_counter()
-    nodes, node_idx, embeddings = compute_structural_embeddings(G)
+    nodes, node_idx, embeddings = compute_structural_embeddings(G, emb_dim=emb_dim)
     type_indexes = build_type_indexes(nodes, node_idx, embeddings)
     t1 = time.perf_counter()
     t_embeddings = t1 - t0
@@ -114,9 +116,9 @@ def _measure_scale_point(n_customers, n_queries=N_QUERIES_PER_SCALE, seed=SEED):
 # ---------------------------------------------------------------------------
 
 def _measure_scale_point_repeated(n_customers, n_queries=N_QUERIES_PER_SCALE,
-                                   seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT):
+                                   seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT, emb_dim=None):
     reps = [
-        _measure_scale_point(n_customers, n_queries=n_queries, seed=seed + rep)
+        _measure_scale_point(n_customers, n_queries=n_queries, seed=seed + rep, emb_dim=emb_dim)
         for rep in range(n_repeats)
     ]
     reps_df = pd.DataFrame(reps)
@@ -145,11 +147,13 @@ def _measure_scale_point_repeated(n_customers, n_queries=N_QUERIES_PER_SCALE,
 # ---------------------------------------------------------------------------
 
 def run_cost_experiment(scale_points=SCALE_POINTS_N_CUSTOMERS, n_queries=N_QUERIES_PER_SCALE,
-                         seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT):
+                         seed=SEED, n_repeats=N_REPETITIONS_PER_SCALE_POINT, emb_dim=None):
     rows = []
     for n_customers in scale_points:
-        print(f"[cost.py] medindo escala n_customers={n_customers} ({n_repeats} repetições) ...")
-        row = _measure_scale_point_repeated(n_customers, n_queries=n_queries, seed=seed, n_repeats=n_repeats)
+        print(f"[cost.py] medindo escala n_customers={n_customers} ({n_repeats} repetições, "
+              f"emb_dim={emb_dim or 'config.EMB_DIM'}) ...")
+        row = _measure_scale_point_repeated(n_customers, n_queries=n_queries, seed=seed,
+                                             n_repeats=n_repeats, emb_dim=emb_dim)
         rows.append(row)
         print(f"  -> n_nodes={row['n_nodes']:.0f} | build_graph={row['t_build_graph_s']:.2f}s | "
               f"speedup mediana={row['speedup']:.2f}x (min={row['speedup_min']:.2f}x, "

@@ -140,19 +140,36 @@ def context_hibrido(customer_id, G, node_idx, embeddings, type_indexes, log,
 # ---------------------------------------------------------------------------
 # CONDIÇÃO 5: SESSÃO DE MEMÓRIA (hipocampo/conteúdo + clash por recência)
 #
-# Comparação justa com a condição 4: mesma ausência de foco explícito do
-# cliente (nenhum add_turn() é chamado -- só "momento 0", seed por
-# recência/frequência do próprio cliente, igual ao entry_node único que
-# o hibrido_sob_demanda usa). O que muda entre as duas é (a) seed
-# distribuído sobre N entidades recentes em vez de 1 nó de entrada só, e
-# (b) resolução de context clash por recência na montagem do texto --
-# isola exatamente as contribuições 1 e 3 do artigo, não confunde com
-# efeito de foco/tópico (isso é o próximo experimento, multi-turno).
+# CORREÇÃO DE UMA AFIRMAÇÃO ANTERIOR (deixada aqui de propósito, não
+# apagada): este comentário dizia que a comparação com hibrido_sob_demanda
+# "isolava exatamente as contribuições 1 e 3". Isso era impreciso -- os
+# dois métodos diferem em VÁRIAS coisas ao mesmo tempo (nº de seeds,
+# âncora, decaimento, E resolução de conflito), não é um ablation limpo.
+# Corrigir um bug de recall (retrieval/hybrid.py) mudou o resultado
+# dessa comparação de forma substancial, confirmando o confound. A
+# condição 6 abaixo (sessao_memoria_sem_clash) é o ablation de verdade.
 # ---------------------------------------------------------------------------
 
 def context_sessao_memoria(customer_id, G, node_idx, embeddings, type_indexes, log,
                             k=TOPK_STATIC_K, **kwargs):
     session = SessionMemory(customer_id, G, node_idx, embeddings, type_indexes, log)
+    result = session.get_context(top_k=k)
+    return result["context_text"]
+
+
+# ---------------------------------------------------------------------------
+# CONDIÇÃO 6: MESMO SESSAO_MEMORIA, SEM RESOLUÇÃO DE CLASH -- ABLATION LIMPO
+#
+# Idêntica à condição 5 em tudo (mesmo seed evolutivo, mesma âncora,
+# mesmo recall corrigido) -- a ÚNICA diferença é resolve_clash=False:
+# lista eventos crus por entidade, sem priorizar o mais recente. Essa é
+# a comparação que isola de fato a contribuição 1 (rho), sem o confound
+# de nº de seeds que invalidou sessao_memoria vs hibrido_sob_demanda.
+# ---------------------------------------------------------------------------
+
+def context_sessao_memoria_sem_clash(customer_id, G, node_idx, embeddings, type_indexes, log,
+                                      k=TOPK_STATIC_K, **kwargs):
+    session = SessionMemory(customer_id, G, node_idx, embeddings, type_indexes, log, resolve_clash=False)
     result = session.get_context(top_k=k)
     return result["context_text"]
 
@@ -163,6 +180,7 @@ CONTEXT_BUILDERS = {
     "topk_estatico": context_topk_estatico,
     "hibrido_sob_demanda": context_hibrido,
     "sessao_memoria": context_sessao_memoria,
+    "sessao_memoria_sem_clash": context_sessao_memoria_sem_clash,
 }
 
 
@@ -260,6 +278,10 @@ def run_comparative_experiment(dataset, G, node_idx, embeddings, type_indexes,
                         "correct": correct,
                         "verdict": verdict_info["verdict"],
                         "context_n_char": len(context),
+                        "context_text": context,  # texto completo -- sem isso, diagnosticar
+                                                    # um caso específico exige reconstruir o
+                                                    # contexto adivinhando parâmetros/seed, o
+                                                    # que já causou análise incorreta antes.
                     })
 
     return pd.DataFrame(rows)

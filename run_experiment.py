@@ -49,13 +49,23 @@ import config
 # MONTAGEM DO PIPELINE (data -> graph -> embeddings)
 # ---------------------------------------------------------------------------
 
-def build_pipeline(n_customers=None, n_events=None, seed=None, verbose=True):
+def build_pipeline(n_customers=None, n_events=None, seed=None, emb_dim=None, verbose=True):
     """Roda data/synthetic_events.py -> graph/build_graph.py ->
     embeddings/structural.py em sequência, medindo tempo de cada etapa.
-    Retorna um dict com tudo que os experimentos precisam."""
+    Retorna um dict com tudo que os experimentos precisam.
+
+    emb_dim é passado EXPLICITAMENTE pra compute_structural_embeddings
+    -- não dependa de sobrescrever config.EMB_DIM depois que os módulos
+    já foram importados: o valor padrão de emb_dim na assinatura de
+    compute_structural_embeddings() é fixado na hora que a função é
+    DEFINIDA (import time), não a cada chamada -- mudar config.EMB_DIM
+    depois disso não se propaga sozinho. Achado real: rodou com
+    "EMB_DIM=128" impresso mas os resultados saíram idênticos a
+    EMB_DIM=32 -- essa desconexão era a causa."""
     seed = seed if seed is not None else config.SEED
     n_customers = n_customers or config.N_CUSTOMERS
     n_events = n_events or config.N_EVENTS
+    emb_dim = emb_dim or config.EMB_DIM
 
     t0 = time.perf_counter()
     ds = generate_dataset(n_customers=n_customers, n_events=n_events, seed=seed)
@@ -64,7 +74,7 @@ def build_pipeline(n_customers=None, n_events=None, seed=None, verbose=True):
     G, graph_stats = build_graph(ds)
     t2 = time.perf_counter()
 
-    nodes, node_idx, embeddings = compute_structural_embeddings(G)
+    nodes, node_idx, embeddings = compute_structural_embeddings(G, emb_dim=emb_dim)
     type_indexes = build_type_indexes(nodes, node_idx, embeddings)
     t3 = time.perf_counter()
 
@@ -78,7 +88,8 @@ def build_pipeline(n_customers=None, n_events=None, seed=None, verbose=True):
               f"{graph_stats['n_nodes']} nós, {graph_stats['n_edges']} arestas "
               f"({graph_stats['n_identity_exact_edges']} identidade exata, "
               f"{graph_stats['n_identity_probabilistic_edges']} probabilística)")
-        print(f"  embeddings + índices: {t3 - t2:6.2f}s")
+        print(f"  embeddings + índices: {t3 - t2:6.2f}s | emb_dim={emb_dim} (aplicado de fato, "
+              f"não só configurado)")
         print()
 
     return {
@@ -110,13 +121,13 @@ def _save_results(results: dict, out_dir="results"):
 # ---------------------------------------------------------------------------
 
 def run_all(answer_fn=None, run_diagnostic=True, run_comparative=True, run_cost=True, run_multiturn=True,
-            n_customers=None, n_events=None, seed=None, cost_scale_points=None):
+            n_customers=None, n_events=None, seed=None, emb_dim=None, cost_scale_points=None):
     using_naive = answer_fn is None
     if using_naive:
         print("!! Nenhum answer_fn informado -- rodando com respondedor de SANITY-CHECK "
               "(não é LLM). Para resultado real, veja o rodapé deste arquivo. !!\n")
 
-    pipeline = build_pipeline(n_customers=n_customers, n_events=n_events, seed=seed)
+    pipeline = build_pipeline(n_customers=n_customers, n_events=n_events, seed=seed, emb_dim=emb_dim)
     ds, G = pipeline["dataset"], pipeline["G"]
     node_idx, embeddings, type_indexes = pipeline["node_idx"], pipeline["embeddings"], pipeline["type_indexes"]
 
@@ -153,20 +164,29 @@ def run_all(answer_fn=None, run_diagnostic=True, run_comparative=True, run_cost=
         print(acc_ci.round(3).to_string(index=False))
         print()
 
-        print("Teste de McNemar: sessao_memoria vs hibrido_sob_demanda "
-              "(pareado por customer_id x fact_type):")
+        print("Teste de McNemar PRINCIPAL -- ablation limpo da contribuição 1 "
+              "(sessao_memoria vs sessao_memoria_sem_clash, mesmo seed/âncora/recall, "
+              "só liga/desliga a resolução de conflito):")
+        mcnemar_ablation = mcnemar_by_segment(comp, "sessao_memoria", "sessao_memoria_sem_clash")
+        print(mcnemar_ablation.round(4).to_string(index=False))
+        print()
+
+        print("Teste de McNemar secundário -- sessao_memoria vs hibrido_sob_demanda "
+              "(NÃO é um ablation limpo: os dois diferem em nº de seeds, âncora e "
+              "decaimento além da resolução de conflito -- ver nota em comparative.py):")
         mcnemar_tbl = mcnemar_by_segment(comp, "sessao_memoria", "hibrido_sob_demanda")
         print(mcnemar_tbl.round(4).to_string(index=False))
         print("(p_value < 0.05 -> a diferença não é explicável por acaso de amostra)")
         print()
         results["comparative_ci"] = acc_ci
+        results["comparative_mcnemar_ablation"] = mcnemar_ablation
         results["comparative_mcnemar"] = mcnemar_tbl
 
     if run_cost:
         print("=" * 78)
         print("EXPERIMENTO 3/4 -- CUSTO (seção 5.4: varredura de escala, sem LLM)")
         print("=" * 78)
-        cost = run_cost_experiment(scale_points=cost_scale_points or config.SCALE_POINTS_N_CUSTOMERS)
+        cost = run_cost_experiment(scale_points=cost_scale_points or config.SCALE_POINTS_N_CUSTOMERS, emb_dim=emb_dim)
         crossover = find_crossover(cost)
         print()
         if crossover is not None:
@@ -207,6 +227,10 @@ if __name__ == "__main__":
     parser.add_argument("--skip-comparative", action="store_true")
     parser.add_argument("--skip-cost", action="store_true")
     parser.add_argument("--skip-multiturn", action="store_true")
+    parser.add_argument("--emb-dim", type=int, default=None,
+                         help="Dimensão do embedding estrutural (SVD). Sobrescreve config.EMB_DIM "
+                              "explicitamente em toda a cadeia (comparativo, custo, etc.) -- "
+                              "editar config.py sozinho pode não bastar, ver build_pipeline().")
     parser.add_argument("--granite", action="store_true",
                          help="Usa o Granite local (ibm-granite/granite-4.1-8b) em vez do "
                               "respondedor de sanity-check. Só funciona na sua máquina, com "
@@ -224,6 +248,7 @@ if __name__ == "__main__":
         run_comparative=not args.skip_comparative,
         run_cost=not args.skip_cost,
         run_multiturn=not args.skip_multiturn,
+        emb_dim=args.emb_dim,
     )
 
     # =========================================================================

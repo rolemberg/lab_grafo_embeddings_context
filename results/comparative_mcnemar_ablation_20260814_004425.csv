@@ -1,0 +1,4 @@
+condition_a,condition_b,segment,n_pairs,n_a_only,n_b_only,n_concordant,p_value
+sessao_memoria,sessao_memoria_sem_clash,geral,120,0,7,113,0.015625
+sessao_memoria,sessao_memoria_sem_clash,leve,60,0,0,60,1.0
+sessao_memoria,sessao_memoria_sem_clash,pesado,60,0,7,53,0.015625

@@ -55,7 +55,16 @@ from config import MAX_EVENTS_PER_ENTITY, EDGE_RECENCY_HALF_LIFE_SECONDS
 # ---------------------------------------------------------------------------
  
 SHORT_TERM_DECAY = 0.8      # fator aplicado ao seed acumulado a cada novo turno
-                             # ("esquecimento de curto prazo" dentro da própria ligação)
+                             # ("esquecimento de curto prazo" dentro da própria ligação).
+                             # Calibrado empiricamente via experiments/multiturn.py: com
+                             # 0.6 (valor original), uma entidade corretamente identificada
+                             # no momento 0 decaía rápido demais (0.6²=0.36 do peso
+                             # original após 2 turnos) e perdia a disputa por massa de
+                             # personalização contra nós de tópico recém-mencionados
+                             # (peso cheio) -- 9 clientes pioravam contra só 2 que
+                             # melhoravam. Com 0.8 (0.8²=0.64), a proporção caiu pra 4
+                             # contra 1 -- ainda não neutro, mas mais que reduzido à
+                             # metade. Ver achado registrado no artigo, seção 6/7.
 INITIAL_SEED_TOP_N = 5       # quantas entidades recentes formam o seed do momento 0
 TOPIC_MASS = 1.0             # massa injetada por tópico novo mencionado pelo cliente
 ANCHOR_MASS = 1.0            # massa reforçada no nó do próprio cliente a cada turno --
@@ -66,6 +75,14 @@ ANCHOR_MASS = 1.0            # massa reforçada no nó do próprio cliente a cad
                               # experiments/multiturn.py: sem ancoragem, recall da
                               # entidade certa CAI depois do cliente mencionar o
                               # assunto, em vez de subir.
+#
+# TENTATIVA TESTADA E REVERTIDA: ancorar também o "pick" nº1 do momento 0
+# (mesma lógica de piso, massa menor) piorou o resultado (5 pioram/1
+# melhora, contra 4/1 sem a mudança) -- a hipótese era que esse pick já
+# era "confirmado", mas na prática ele não é necessariamente a entidade
+# relevante pro TÓPICO específico sendo perguntado, só a mais saliente
+# em geral; protegê-lo compete com o tópico genuíno em vez de coincidir
+# com ele. Registrado como tentativa negativa, não implementado.
  
 # placeholder determinístico -- ver nota (2) no docstring do módulo
 TOPIC_TO_EVENT_TYPE = {
@@ -91,6 +108,11 @@ class SessionMemory:
     embeddings: object
     type_indexes: dict
     log: object
+    resolve_clash: bool = True  # ver _build_context_text -- False = ablation
+                                  # da contribuição 1 (lista eventos crus, sem
+                                  # priorizar o mais recente), pra isolar seu
+                                  # efeito de tudo mais que SessionMemory faz
+                                  # (seed evolutivo, âncora, recall corrigido)
  
     entry_node: str = field(init=False)
     known_nodes: set = field(init=False)
@@ -240,13 +262,40 @@ class SessionMemory:
             # entidade (ex: view e depois purchase) -- o mais recente vira
             # o "estado vigente"; o resto vira nota de contagem, não fica
             # listado como se fossem fatos igualmente válidos.
-            latest = ev.iloc[0]
-            older_count = len(ev) - 1
-            older_note = f", mais {older_count} evento(s) anteriores" if older_count else ""
-            lines.append(
-                f"- {ent} (relevância={score:.3f}): estado mais recente = "
-                f"{latest.event_type} em ts={int(latest.ts)}{older_note}"
-            )
+            # CLASH: pode haver mais de um event_type diferente pra mesma
+            # entidade (ex: view e depois purchase). Ramo A
+            # (resolve_clash=True, comportamento normal): o mais recente
+            # vira o "estado vigente", o resto vira nota de contagem --
+            # esta é a Contribuição 1 do artigo. Ramo B
+            # (resolve_clash=False, ablation): lista TODOS os eventos
+            # crus, sem priorizar nenhum -- exatamente o que um sistema
+            # de retrieval ingênuo faria, mas com o MESMO seed evolutivo,
+            # âncora e recall corrigido do resto do SessionMemory. É essa
+            # comparação (True vs False, tudo mais igual) que isola o
+            # efeito de rho sem o confound de número de seeds que
+            # invalidou a comparação sessao_memoria vs hibrido_sob_demanda.
+            if self.resolve_clash:
+                latest = ev.iloc[0]
+                older_count = len(ev) - 1
+                # NÃO usar um número cru aqui (ex: "mais 12 eventos
+                # anteriores") -- achado real, rodando com LLM em escala:
+                # quando a pergunta é sobre CONTAGEM AGREGADA
+                # (support_ticket_count), o texto acaba com vários números
+                # "mais N eventos anteriores" (um por entidade do top-k)
+                # boiando perto do número certo (o do Resumo de atividade),
+                # e o modelo se confunde e devolve resposta vazia
+                # (malformed) em vez de arriscar qual número é o certo.
+                # Sem número aqui, ambíguo, mas por outro motivo bom: só o
+                # Resumo de atividade tem número de contagem no texto
+                # inteiro.
+                older_note = " (havia também interações anteriores registradas)" if older_count else ""
+                lines.append(
+                    f"- {ent} (relevância={score:.3f}): estado mais recente = "
+                    f"{latest.event_type} em ts={int(latest.ts)}{older_note}"
+                )
+            else:
+                eventos = "; ".join(f"{row.event_type} em ts={int(row.ts)}" for row in ev.itertuples())
+                lines.append(f"- {ent} (relevância={score:.3f}): {eventos}")
  
         return "\n".join(lines)
 

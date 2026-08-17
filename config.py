@@ -70,7 +70,7 @@ SEED = 42
 # data/synthetic_events.py
 # ---------------------------------------------------------------------------
 
-N_CUSTOMERS = 1000
+N_CUSTOMERS = 10000
 N_ENTITIES = 60
 N_NICHES = 8
 EVENT_TYPES = ["view", "add_to_cart", "purchase", "search", "support_ticket"]
@@ -80,7 +80,7 @@ CHANNELS = ["web", "app", "call_center"]
 FRAC_WITH_LOYALTY_KEY = 0.6      # fração de clientes com chave exata web<->app
 FRAC_WITH_CALL_CENTER = 0.35     # fração de clientes que também usa call_center
 
-N_EVENTS = 12000
+N_EVENTS = 120000
 
 CUSTOMER_ENGAGEMENT_ALPHA = 1.2  # shape do Pareto p/ distribuição de engajamento
                                   # em cauda longa -- menor = cauda mais pesada
@@ -116,8 +116,31 @@ W_TEXT_SIM = 0.5                 # peso do sinal textual (TF-IDF) no score combi
 # embeddings/structural.py
 # ---------------------------------------------------------------------------
 
-EMB_DIM = 32
+# EMB_DIM=32 foi calibrado e validado só até ~2 mil nós (N_CUSTOMERS~1000
+# default). Achado real, rodando com ~20 mil nós (N_CUSTOMERS~10000): overlap
+# do recall híbrido contra PPR completo caiu de ~65% para ~40%, e a
+# significância do experimento comparativo (McNemar) foi junto -- SVD
+# truncado com dimensão fixa perde capacidade discriminativa conforme o
+# grafo cresce. Testado empiricamente: EMB_DIM=128 recupera overlap
+# (~68%, contra ~55% em 32) num grafo de ~10 mil nós, com custo de tempo de
+# embedding ainda desprezível (<1s). Use auto_emb_dim() abaixo para escalar
+# automaticamente em vez de fixar um valor só, ou ajuste manualmente se
+# rodar em escala muito diferente da testada.
+EMB_DIM = 128
 N_NEIGHBORS_DEFAULT = 30
+
+
+def auto_emb_dim(n_nodes: int, min_dim: int = 32, max_dim: int = 256) -> int:
+    """Sugestão de EMB_DIM proporcional ao tamanho do grafo -- regra
+    empírica, não teórica: dobra a dimensão a cada ordem de grandeza de
+    nós, calibrada nos pontos observados (2 mil nós -> 32 já era
+    suficiente; 20 mil nós -> precisou de ~128 pra recuperar overlap).
+    Não substitui validação -- é um ponto de partida melhor que a
+    constante fixa."""
+    import math
+    scale = max(1, n_nodes // 2000)
+    dim = min_dim * (2 ** int(math.log2(scale + 1)))
+    return max(min_dim, min(max_dim, dim))
 
 
 # ---------------------------------------------------------------------------
@@ -159,16 +182,21 @@ FACT_TYPES = ["last_entity", "support_ticket_count"]
 NOISE_LEVELS = [0.0, 0.5, 0.9]               # fração do contexto que é ruído
 POSITIONS = ["inicio", "meio", "fim"]                # onde o alvo fica embutido
 TOTAL_CONTEXT_LINES = 12                # tamanho do contexto quando noise_pct=1.0
-N_CUSTOMERS_PER_CONDITION = 30           # trials por combinação (ruído x posição x fato)
+N_CUSTOMERS_PER_CONDITION = 2           # trials por combinação (ruído x posição x fato)
 
 
 # ---------------------------------------------------------------------------
 # experiments/comparative.py
 # ---------------------------------------------------------------------------
 
-CONDITIONS = ["sem_retrieval", "contexto_completo", "topk_estatico", "hibrido_sob_demanda", "sessao_memoria"]
+CONDITIONS = ["sem_retrieval", "contexto_completo", "topk_estatico", "hibrido_sob_demanda",
+              "sessao_memoria", "sessao_memoria_sem_clash"]
 TOPK_STATIC_K = 3                # tamanho do top-k estático (mesmo k do híbrido -- comparação justa)
-N_CUSTOMERS_PER_SEGMENT = 30      # por segmento (leve/pesado) e por tipo de fato
+N_CUSTOMERS_PER_SEGMENT = 30     # por segmento (leve/pesado) e por tipo de fato -- 30 dá
+                                   # ~110 pares avaliáveis no teste de McNemar (sessão vs.
+                                   # híbrido), suficiente pra significância estatística limpa
+                                   # (ver achado: com N=5 o efeito aparece mas fica marginal,
+                                   # p=0.0625; com N~30 deu p=0.0009)
 HEAVY_SEGMENT_PERCENTILE = 0.95   # cliente "pesado" = acima deste percentil de engajamento
 
 

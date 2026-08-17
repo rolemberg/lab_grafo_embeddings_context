@@ -54,6 +54,15 @@ from config import (
     MULTITURN_UTTERANCE_SUPORTE, MULTITURN_UTTERANCE_COMPRA, SEED,
 )
 
+RESULT_COLUMNS = [
+    "customer_id",
+    "stage",
+    "turn_count",
+    "context_n_char",
+    "suporte_presente",
+    "compra_presente",
+]
+
 
 # ---------------------------------------------------------------------------
 # SELEÇÃO DE CLIENTES E GROUND TRUTH POR TÓPICO
@@ -137,7 +146,8 @@ def run_multiturn_experiment(dataset, G, node_idx, embeddings, type_indexes,
             G, node_idx, embeddings, type_indexes, log, top_k=top_k,
         ))
 
-    return pd.DataFrame(rows)
+    # Mantém schema estável mesmo sem clientes elegíveis.
+    return pd.DataFrame(rows, columns=RESULT_COLUMNS)
 
 
 # ---------------------------------------------------------------------------

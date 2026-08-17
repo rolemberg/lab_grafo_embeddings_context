@@ -91,12 +91,48 @@ def local_ppr_rerank(G, query_node, candidates, top_k=10,
 # PIPELINE HÍBRIDO COMPLETO
 # ---------------------------------------------------------------------------
 
+DIRECT_RECENCY_TOPN = 10  # quantos vizinhos por recência direta somar ao recall por embedding
+
+
+def _direct_recency_candidates(G, query_node, target_type="entity", n=DIRECT_RECENCY_TOPN):
+    """Candidatos direto por PESO DE ARESTA (já ponderado por recência,
+    Eq. 2), sem passar pelo espaço de embedding. Ver nota em
+    hybrid_retrieve() -- isso é o fix pro gargalo de recall em
+    perguntas tipo 'qual foi a última X', onde proximidade estrutural
+    não é a mesma coisa que recência."""
+    if query_node not in G:
+        return []
+    neighbors = [
+        (nb, G[query_node][nb].get("weight", 0.0))
+        for nb in G.neighbors(query_node)
+        if node_type(nb) == target_type
+    ]
+    neighbors.sort(key=lambda x: x[1], reverse=True)
+    return [nb for nb, _ in neighbors[:n]]
+
+
+# ---------------------------------------------------------------------------
+# RECALL + RERANK, QUERY ÚNICA
+# ---------------------------------------------------------------------------
+
 def hybrid_retrieve(query_node, G, node_idx, embeddings, type_indexes,
                      k_recall=30, top_k=10, target_type="entity"):
     """Recall (kNN) + rerank (PPR local). Retorna (ranked, t_recall_ms, t_rerank_ms)."""
     t0 = time.perf_counter()
     candidates = recall_candidates(query_node, node_idx, embeddings, type_indexes,
                                     target_type=target_type, k=k_recall)
+    # UNIÃO com candidatos por recência direta (peso de aresta) -- fix pro
+    # gargalo diagnosticado no experimento comparativo em escala grande:
+    # recall via embedding busca proximidade ESTRUTURAL, não recência.
+    # Uma entidade da interação mais recente do cliente pode não estar
+    # "perto" dele no espaço de embedding (o embedding reflete padrão de
+    # interação, não tempo) -- então perguntas do tipo "qual foi a
+    # última X" perdiam a entidade certa antes mesmo do rerank rodar.
+    # Como já calculamos peso por recência nas arestas (Eq. 2 do artigo),
+    # isso é essencialmente de graça: sem embedding, sem custo extra
+    # relevante, só ordena os vizinhos diretos já conhecidos.
+    direct = _direct_recency_candidates(G, query_node, target_type=target_type, n=DIRECT_RECENCY_TOPN)
+    candidates = list(dict.fromkeys(candidates + direct))  # une, preserva ordem, sem duplicar
     t1 = time.perf_counter()
     ranked = local_ppr_rerank(G, query_node, candidates, top_k=top_k)
     t2 = time.perf_counter()
@@ -112,12 +148,17 @@ def hybrid_retrieve(query_node, G, node_idx, embeddings, type_indexes,
 # continuam servindo o caso de uma consulta única (ex: experiments/).
 # ---------------------------------------------------------------------------
 
-def recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes,
+def recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes, G=None,
                                     target_type="entity", k_per_seed=20):
     """Recall unindo candidatos de CADA nó do vetor de seed (peso > 0),
     na ordem de maior peso primeiro. Não pondera o recall em si -- o
     peso de cada seed só importa depois, no rerank via PPR
-    personalizado (local_ppr_rerank_from_weights)."""
+    personalizado (local_ppr_rerank_from_weights).
+
+    G opcional: se passado, une também candidatos por recência DIRETA
+    (peso de aresta, sem embedding) a partir de cada nó do seed -- mesmo
+    fix de hybrid_retrieve(), necessário aqui porque é esse caminho que
+    agent/session_memory.py usa de fato (não o de query única)."""
     ordered_seeds = sorted(seed_weights.items(), key=lambda kv: kv[1], reverse=True)
     candidates, seen = [], set()
     for node, weight in ordered_seeds:
@@ -128,6 +169,11 @@ def recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_inde
             if c not in seen:
                 seen.add(c)
                 candidates.append(c)
+        if G is not None:
+            for c in _direct_recency_candidates(G, node, target_type=target_type, n=DIRECT_RECENCY_TOPN):
+                if c not in seen:
+                    seen.add(c)
+                    candidates.append(c)
     return candidates
 
 
@@ -178,7 +224,7 @@ def hybrid_retrieve_from_weights(seed_weights, G, node_idx, embeddings, type_ind
     agent/session_memory.py para servir consultas cujo foco evolui ao
     longo de uma sessão."""
     t0 = time.perf_counter()
-    candidates = recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes,
+    candidates = recall_candidates_from_weights(seed_weights, node_idx, embeddings, type_indexes, G=G,
                                                  target_type=target_type, k_per_seed=k_recall_per_seed)
     t1 = time.perf_counter()
     ranked = local_ppr_rerank_from_weights(G, seed_weights, candidates, top_k=top_k)
